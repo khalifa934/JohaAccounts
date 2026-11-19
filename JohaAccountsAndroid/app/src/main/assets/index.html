@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>حسابات جحا</title>
+<style>
+:root{--bg:#f6f4ef;--card:#fff;--ink:#2d2a26;--muted:#7a736a;--pri:#4f7c6a;--pri2:#e6efe9;--warn:#b5543c;--line:#e4dfd6;color-scheme:light}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#1d1f1e;--card:#262927;--ink:#ece8e1;--muted:#a09a90;--pri:#5e8c76;--pri2:#2f3a34;--warn:#e08a72;--line:#3a3e3b;color-scheme:dark}}
+*{box-sizing:border-box}
+body{margin:0;font-family:Tahoma,Arial,sans-serif;background:var(--bg);color:var(--ink);font-size:15px}
+header{background:var(--pri);color:#fff;padding:14px 16px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px}
+nav{display:flex;gap:6px;overflow-x:auto;padding:10px;background:var(--card);border-bottom:1px solid var(--line)}
+button{font:inherit;border:0;border-radius:10px;padding:10px 14px;background:var(--pri);color:#fff;cursor:pointer;white-space:nowrap}
+button.ghost{background:var(--pri2);color:var(--ink)}
+button.danger{background:var(--warn)}
+button.small{padding:5px 9px;font-size:13px}
+main{padding:14px;max-width:1000px;margin:auto}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-bottom:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px}
+.card .v{font-size:20px;font-weight:bold;margin-top:6px}
+table{width:100%;border-collapse:collapse;background:var(--card);font-size:14px}
+th,td{padding:9px;border-bottom:1px solid var(--line);text-align:right}
+th{background:var(--pri2)}
+.wrap{overflow-x:auto;border-radius:12px;border:1px solid var(--line);margin-bottom:12px}
+input,select,textarea{font:inherit;padding:9px;border:1px solid var(--line);border-radius:8px;background:var(--card);color:var(--ink);width:100%}
+.row{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:10px;margin-bottom:10px}
+label{font-size:13px;color:var(--muted);display:block;margin:0 0 4px}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;padding:12px;z-index:9}
+.box{background:var(--card);color:var(--ink);border-radius:16px;padding:18px;width:min(560px,100%);max-height:92vh;overflow:auto}
+.neg{color:var(--warn)}
+.muted{color:var(--muted);font-size:13px}
+.tools{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0;align-items:center}
+@media print{header,nav,.noprint{display:none!important}body{background:#fff;color:#000}.card,table,.wrap{border:0}}
+</style>
+</head>
+<body>
+<header><div><b style="font-size:20px">حسابات جحا</b> <span style="opacity:.8;font-size:13px">Joha Accounts</span></div><div id="hdrDate" style="font-size:13px"></div></header>
+<nav id="nav" class="noprint"></nav>
+<main id="app"></main>
+<script>
+const $=s=>document.querySelector(s);
+const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const fmt=n=>(Math.round(n*100)/100).toLocaleString('ar-EG',{minimumFractionDigits:2,maximumFractionDigits:2});
+const today=()=>new Date().toISOString().slice(0,10);
+const yearStart=()=>today().slice(0,4)+'-01-01';
+const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7);
+const val=(r,n)=>(r.querySelector(`[name="${n}"]`)?.value||'').trim();
+const K='joha-accounts-v1';
+let db={parties:[],tx:[]};
+let view='dash',ctx={};
+const KIND={sale:{l:'فاتورة مبيعات',p:'S',t:'c',s:1},rec:{l:'سند قبض',p:'R',t:'c',s:-1},pur:{l:'فاتورة مشتريات',p:'P',t:'s',s:1},pay:{l:'سند صرف',p:'Y',t:'s',s:-1}};
+const NAV=[['dash','الرئيسية'],['in','الوارد (العملاء)'],['out','المنصرف (الموردين)'],['stmt','كشوف الحسابات'],['rep','التقارير'],['bk','النسخ الاحتياطي']];
+
+function load(){try{const s=localStorage.getItem(K);if(s)db=JSON.parse(s);}catch(e){}}
+function save(){try{localStorage.setItem(K,JSON.stringify(db));}catch(e){}}
+const party=id=>db.parties.find(p=>p.id===id);
+const bal=p=>(p.open||0)+db.tx.filter(t=>t.pid===p.id).reduce((a,t)=>a+KIND[t.k].s*t.amt,0);
+const isDr=t=>(KIND[t.k].t==='c')===(KIND[t.k].s===1); // عميل: فاتورة مدين، سند قبض دائن | مورد: فاتورة دائن، سند صرف مدين
+const ref=t=>KIND[t.k].p+t.no;
+const nextNo=k=>db.tx.filter(t=>t.k===k).reduce((m,t)=>Math.max(m,t.no),0)+1;
+const sortTx=a=>a.slice().sort((x,y)=>x.date.localeCompare(y.date)||x.seq-y.seq);
+const card=(l,v)=>`<div class="card"><div class="muted">${l}</div><div class="v ${v<0?'neg':''}">${fmt(v)}</div></div>`;
+const fieldSel=(name,opts,val)=>`<select name="${name}">${opts.map(o=>`<option value="${esc(o[0])}" ${o[0]===val?'selected':''}>${esc(o[1])}</option>`).join('')}</select>`;
+
+function go(v){view=v;render();window.scrollTo(0,0);}
+function render(){
+  $('#nav').innerHTML=NAV.map(([v,l])=>`<button class="${v===view?'':'ghost'}" onclick="go('${v}')">${l}</button>`).join('');
+  const f={dash:dashView,in:()=>sideView('c'),out:()=>sideView('s'),stmt:stmtView,rep:repView,bk:bkView}[view];
+  $('#app').innerHTML=f();
+}
+
+function modal(title,fields,onSave){
+  const m=document.createElement('div');m.className='modal';
+  m.innerHTML=`<div class="box"><h3>${title}</h3><div id="mf">${fields}</div><p id="err" style="color:var(--warn)"></p><div class="tools"><button id="ok">حفظ</button><button class="ghost" id="cx">إلغاء</button></div></div>`;
+  document.body.appendChild(m);
+  m.querySelector('#cx').onclick=()=>m.remove();
+  m.querySelector('#ok').onclick=()=>{const err=onSave(m.querySelector('#mf'));if(err){m.querySelector('#err').textContent=err;}else{m.remove();save();render();}};
+}
+
+function openParty(T,id){
+  const p=id?party(id):null;
+  const f=`<label>الاسم</label><input name="name" value="${esc(p?.name||'')}">
+  <div class="row" style="margin-top:10px"><div><label>رقم الهاتف (اختياري)</label><input name="phone" value="${esc(p?.phone||'')}"></div>
+  <div><label>الرصيد الافتتاحي</label><input type="number" step="0.01" name="open" value="${p?.open??0}"></div></div>
+  <p class="muted">الرصيد الافتتاحي: ${T==='c'?'المبلغ المستحق على العميل قبل بدء استخدام التطبيق':'المبلغ المستحق للمورد قبل بدء استخدام التطبيق'}.</p>`;
+  modal((p?'تعديل ':'إضافة ')+(T==='c'?'عميل':'مورد'),f,root=>{
+    const name=val(root,'name');
+    if(!name) return 'الاسم مطلوب';
+    const d={name,phone:val(root,'phone'),open:parseFloat(val(root,'open'))||0};
+    if(p) Object.assign(p,d); else db.parties.push({id:uid(),t:T,...d});
+    return null;
+  });
+}
+
+function delParty(id){
+  if(db.tx.some(t=>t.pid===id)) return alert('لا يمكن حذف طرف له عمليات مسجلة');
+  if(!confirm('حذف هذا الاسم؟'))return;
+  db.parties=db.parties.filter(p=>p.id!==id);save();render();
+}
+
+function openTx(k,id){
+  const Kd=KIND[k],t=id?db.tx.find(x=>x.id===id):null;
+  const opts=db.parties.filter(p=>p.t===Kd.t).map(p=>[p.id,p.name]);
+  if(!opts.length) return alert('أضف '+(Kd.t==='c'?'عميلًا':'موردًا')+' أولًا');
+  const f=`<div class="row"><div><label>${Kd.t==='c'?'العميل':'المورد'}</label>${fieldSel('pid',opts,t?.pid)}</div>
+  <div><label>التاريخ</label><input type="date" name="date" value="${t?.date||today()}"></div>
+  <div><label>القيمة</label><input type="number" step="0.01" min="0" name="amt" value="${t?.amt??''}"></div>
+  ${(k==='rec'||k==='pay')?`<div><label>طريقة الدفع</label>${fieldSel('method',[['نقدي','نقدي'],['تحويل بنكي','تحويل بنكي'],['إلكتروني','إلكتروني']],t?.method)}</div>`:''}</div>
+  <label>ملاحظات (اختياري)</label><textarea name="note" rows="2">${esc(t?.note||'')}</textarea>`;
+  modal((t?'تعديل ':'')+Kd.l+(t?' '+ref(t):''),f,root=>{
+    const d={pid:val(root,'pid'),date:val(root,'date'),amt:parseFloat(val(root,'amt')),method:val(root,'method'),note:val(root,'note')};
+    if(!party(d.pid)) return 'اختر الاسم';
+    if(!d.date) return 'حدد التاريخ';
+    if(!(d.amt>0)) return 'القيمة يجب أن تكون أكبر من صفر';
+    if(t) Object.assign(t,d); else db.tx.push({id:uid(),k,no:nextNo(k),seq:Date.now(),...d});
+    return null;
+  });
+}
+
+function delTx(id){if(!confirm('حذف هذه العملية وتعديل الرصيد تلقائيًا؟'))return;db.tx=db.tx.filter(t=>t.id!==id);save();render();}
+
+function txTable(list){
+  if(!list.length) return '<p class="muted">لا توجد عمليات</p>';
+  return `<div class="wrap"><table><tr><th>التاريخ</th><th>الرقم</th><th>النوع</th><th>الطرف</th><th>القيمة</th><th>ملاحظات</th><th class="noprint"></th></tr>
+  ${list.map(t=>`<tr><td>${t.date}</td><td>${ref(t)}</td><td>${KIND[t.k].l}</td><td>${esc(party(t.pid)?.name||'—')}</td><td>${fmt(t.amt)}</td><td>${esc(t.note)}</td>
+  <td class="noprint"><button class="small ghost" onclick="openTx('${t.k}','${t.id}')">تعديل</button> <button class="small danger" onclick="delTx('${t.id}')">حذف</button></td></tr>`).join('')}</table></div>`;
+}
+
+function dashView(){
+  const C=db.parties.filter(p=>p.t==='c'),S=db.parties.filter(p=>p.t==='s');
+  const sc=C.reduce((a,p)=>a+bal(p),0),ss=S.reduce((a,p)=>a+bal(p),0);
+  const sum=k=>db.tx.filter(t=>t.k===k).reduce((a,t)=>a+t.amt,0);
+  const recent=sortTx(db.tx).reverse().slice(0,10);
+  return `<div class="cards">${card('إجمالي أرصدة العملاء',sc)}${card('إجمالي أرصدة الموردين',ss)}${card('المحصل من العملاء',sum('rec'))}${card('المدفوع للموردين',sum('pay'))}${card('صافي الموقف المالي',sc-ss)}</div>
+  <div class="tools"><button onclick="openTx('sale')">فاتورة مبيعات</button><button onclick="openTx('rec')">سند قبض</button><button onclick="openTx('pur')">فاتورة مشتريات</button><button onclick="openTx('pay')">سند صرف</button></div>
+  <h3>آخر العمليات</h3>${txTable(recent)}`;
+}
+
+function sideView(T){
+  const ps=db.parties.filter(p=>p.t===T),ks=T==='c'?['sale','rec']:['pur','pay'];
+  const pl=T==='c'?'عميل':'مورد',nm=T==='c'?'العملاء':'الموردين';
+  const list=sortTx(db.tx.filter(t=>ks.includes(t.k))).reverse();
+  return `<div class="tools"><button onclick="openParty('${T}')">+ ${pl} جديد</button><button onclick="openTx('${ks[0]}')">${KIND[ks[0]].l}</button><button onclick="openTx('${ks[1]}')">${KIND[ks[1]].l}</button></div>
+  <h3>${nm}</h3>${ps.length?`<div class="wrap"><table><tr><th>الاسم</th><th>الهاتف</th><th>الرصيد الحالي</th><th class="noprint"></th></tr>
+  ${ps.map(p=>`<tr><td>${esc(p.name)}</td><td>${esc(p.phone)}</td><td>${fmt(bal(p))}</td><td class="noprint"><button class="small ghost" onclick="openStmt('${p.id}')">كشف</button> <button class="small ghost" onclick="openParty('${T}','${p.id}')">تعديل</button> <button class="small danger" onclick="delParty('${p.id}')">حذف</button></td></tr>`).join('')}</table></div>`:'<p class="muted">لا يوجد</p>'}
+  <h3>آخر العمليات</h3>${txTable(list.slice(0,50))}`;
+}
+
+function openStmt(id){ctx.pid=id;go('stmt');}
+
+function stmtView(){
+  ctx.from=ctx.from||yearStart();ctx.to=ctx.to||today();
+  const sel=`<select onchange="ctx.pid=this.value;render()"><option value="">— اختر عميلًا أو موردًا —</option>${db.parties.map(p=>`<option value="${p.id}" ${p.id===ctx.pid?'selected':''}>${esc(p.name)} (${p.t==='c'?'عميل':'مورد'})</option>`).join('')}</select>`;
+  const controls=`<div class="row"><div><label>الطرف</label>${sel}</div><div><label>من تاريخ</label><input type="date" value="${ctx.from}" onchange="ctx.from=this.value;render()"></div><div><label>إلى تاريخ</label><input type="date" value="${ctx.to}" onchange="ctx.to=this.value;render()"></div></div>`;
+  const p=party(ctx.pid);
+  if(!p) return controls+'<p class="muted">اختر طرفًا لعرض كشف الحساب</p>';
+  let run=p.open||0,dSum=0,cSum=0,rows='';
+  const all=sortTx(db.tx.filter(t=>t.pid===p.id));
+  all.filter(t=>t.date<ctx.from).forEach(t=>run+=KIND[t.k].s*t.amt);
+  const open=run;
+  all.filter(t=>t.date>=ctx.from&&t.date<=ctx.to).forEach(t=>{
+    run+=KIND[t.k].s*t.amt;
+    const dr=isDr(t);if(dr)dSum+=t.amt;else cSum+=t.amt;
+    rows+=`<tr><td>${t.date}</td><td>${ref(t)}</td><td>${KIND[t.k].l}</td><td>${dr?fmt(t.amt):''}</td><td>${dr?'':fmt(t.amt)}</td><td>${fmt(run)}</td><td>${esc(t.note)}</td></tr>`;
+  });
+  return controls+`<div class="tools noprint"><button onclick="window.print()">طباعة / حفظ PDF</button></div>
+  <h3>كشف حساب: ${esc(p.name)} <span class="muted">(${p.t==='c'?'عميل':'مورد'}) — من ${ctx.from} إلى ${ctx.to}</span></h3>
+  <div class="wrap"><table><tr><th>التاريخ</th><th>رقم العملية</th><th>نوع العملية</th><th>مدين</th><th>دائن</th><th>الرصيد</th><th>ملاحظات</th></tr>
+  <tr><td colspan="5"><b>رصيد أول المدة</b></td><td><b>${fmt(open)}</b></td><td></td></tr>${rows}
+  <tr><td colspan="3"><b>الإجماليات</b></td><td><b>${fmt(dSum)}</b></td><td><b>${fmt(cSum)}</b></td><td><b>${fmt(run)}</b></td><td class="muted">الرصيد النهائي</td></tr></table></div>`;
+}
+
+function repView(){
+  ctx.rf=ctx.rf||yearStart();ctx.rt=ctx.rt||today();
+  const byBal=T=>db.parties.filter(p=>p.t===T).map(p=>({p,b:bal(p)})).sort((a,b)=>b.b-a.b);
+  const list=(T)=>{const r=byBal(T);return r.length?`<div class="wrap"><table><tr><th>الاسم</th><th>الرصيد</th></tr>${r.map(x=>`<tr><td>${esc(x.p.name)}</td><td>${fmt(x.b)}</td></tr>`).join('')}</table></div>`:'<p class="muted">لا يوجد</p>';};
+  const inP=t=>t.date>=ctx.rf&&t.date<=ctx.rt;
+  const mv=ks=>{const L=db.tx.filter(t=>ks.includes(t.k)&&inP(t));return `<div class="wrap"><table><tr><th>النوع</th><th>عدد العمليات</th><th>الإجمالي</th></tr>${ks.map(k=>{const x=L.filter(t=>t.k===k);return `<tr><td>${KIND[k].l}</td><td>${x.length}</td><td>${fmt(x.reduce((a,t)=>a+t.amt,0))}</td></tr>`}).join('')}</table></div>`;};
+  const C=db.parties.filter(p=>p.t==='c').reduce((a,p)=>a+bal(p),0),S=db.parties.filter(p=>p.t==='s').reduce((a,p)=>a+bal(p),0);
+  return `<div class="cards">${card('إجمالي مديونيات العملاء',C)}${card('إجمالي مستحقات الموردين',S)}</div>
+  <div class="row"><div><label>من تاريخ</label><input type="date" value="${ctx.rf}" onchange="ctx.rf=this.value;render()"></div><div><label>إلى تاريخ</label><input type="date" value="${ctx.rt}" onchange="ctx.rt=this.value;render()"></div></div>
+  <h3>حركة الوارد خلال الفترة</h3>${mv(['sale','rec'])}
+  <h3>حركة المنصرف خلال الفترة</h3>${mv(['pur','pay'])}
+  <h3>العملاء مرتبون حسب الرصيد</h3>${list('c')}
+  <h3>الموردون مرتبون حسب الرصيد</h3>${list('s')}`;
+}
+
+function bkView(){
+  return `<p class="muted">البيانات محفوظة في هذا المتصفح. للنسخ الاحتياطي انسخ النص التالي واحفظه في ملف، ولاستعادة البيانات الصق النسخة في الخانة الثانية.</p>
+  <div class="tools"><button class="ghost" onclick="loadSample()">بيانات تجريبية</button><button class="danger" onclick="wipe()">مسح كل البيانات</button></div>
+  <label>نسخة احتياطية</label><textarea id="bkOut" rows="6" readonly>${esc(JSON.stringify(db))}</textarea>
+  <div class="tools"><button class="ghost" onclick="const t=$('#bkOut');t.select();try{navigator.clipboard.writeText(t.value)}catch(e){document.execCommand('copy')}">تحديد ونسخ</button></div>
+  <label>استعادة من نسخة</label><textarea id="bkIn" rows="5" placeholder="الصق النسخة هنا"></textarea>
+  <div class="tools"><button onclick="restore()">استعادة البيانات</button></div>`;
+}
+
+function restore(){
+  let o;try{o=JSON.parse($('#bkIn').value);}catch(e){return alert('النسخة غير صالحة');}
+  if(!Array.isArray(o.parties)||!Array.isArray(o.tx))return alert('النسخة غير صالحة');
+  const seen=new Set();
+  for(const t of o.tx){const key=t.k+t.no;if(seen.has(key))return alert('أرقام مكررة في النسخة: '+key);seen.add(key);}
+  if(!confirm('استبدال البيانات الحالية بالنسخة؟'))return;
+  db=o;save();render();
+}
+
+function loadSample(){
+  if(!confirm('استبدال البيانات الحالية ببيانات تجريبية؟'))return;
+  const d=n=>{const x=new Date();x.setDate(x.getDate()-n);return x.toISOString().slice(0,10);};
+  const c1=uid(),c2=uid(),s1=uid(),s2=uid();
+  db={parties:[{id:c1,t:'c',name:'أحمد محمد',phone:'',open:500},{id:c2,t:'c',name:'سمير علي',phone:'',open:0},{id:s1,t:'s',name:'شركة الأغلفة الحديثة',phone:'',open:0},{id:s2,t:'s',name:'مطبعة النور',phone:'',open:200}],
+  tx:[
+    {id:uid(),k:'sale',no:1,pid:c1,date:d(20),amt:3000,method:'',note:'',seq:1},
+    {id:uid(),k:'rec',no:1,pid:c1,date:d(10),amt:1500,method:'نقدي',note:'',seq:2},
+    {id:uid(),k:'sale',no:2,pid:c2,date:d(5),amt:2200,method:'',note:'',seq:3},
+    {id:uid(),k:'pur',no:1,pid:s1,date:d(15),amt:1800,method:'',note:'',seq:4},
+    {id:uid(),k:'pay',no:1,pid:s1,date:d(3),amt:1000,method:'تحويل بنكي',note:'',seq:5},
+    {id:uid(),k:'pur',no:2,pid:s2,date:d(2),amt:400,method:'',note:'',seq:6}]};
+  save();render();
+}
+
+function wipe(){if(!confirm('مسح كل البيانات نهائيًا؟'))return;db={parties:[],tx:[]};save();render();}
+
+load();
+$('#hdrDate').textContent=new Date().toLocaleDateString('ar-EG',{weekday:'long',year:'numeric',month:'long',day:'numeric'});
+render();
+</script>
+</body>
+</html>
